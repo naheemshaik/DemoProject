@@ -42,14 +42,7 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                script {
-                    // Install project dependencies
-                    bat 'npm install'
-                }
-            }
-        }
+       
 
         stage('Build') {
             steps {
