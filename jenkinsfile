@@ -1,21 +1,155 @@
 pipeline {
     agent any
+   
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-2'
+        // You can add more environment variables here if needed
+    }
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT', 
+            choices: ['dev', 'testing', 'staging', 'production'], 
+            description: 'Select the environment for deployment'
+        )
+        string(
+            name: 'emailRecipients',
+            defaultValue: 'naheem.shaik@stackyon.com,suma.rudraraju@stackyon.com',
+            description: 'Enter the email recipients (comma-separated)'
+        )
+        string(
+            name: 'BRANCH_NAME', 
+            defaultValue: 'main', 
+            description: 'Enter the branch name to checkout'
+        )
+    }
 
     stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    def repoUrl = 'https://github.com/naheemshaik/DemoProject.git'
+                    def branch = params.BRANCH_NAME ?: 'main'
+
+                    // Checkout the specified branch from the repository
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: branch]],
+                        userRemoteConfigs: [[url: repoUrl, credentialsId: 'git_cred']], // Ensure this credential ID is set up in Jenkins
+                        extensions: []
+                    ])
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    // Install project dependencies
+                    bat 'npm install'
+                }
+            }
+        }
+
         stage('Build') {
             steps {
-                echo 'Building..'
+                script {
+                    // Build the Angular project for production
+                    bat 'npm run build -- --prod'
+                }
             }
         }
-        stage('Test') {
+
+        stage('Run Tests') {
             steps {
-                echo 'Testing..'
+                script {
+                    // Run unit tests (adjust the command as per your test setup)
+                    bat 'npm test -- --watch=false --browsers=ChromeHeadless'
+                }
             }
         }
-        stage('Deploy') {
+
+        stage('Archive Artifacts') {
             steps {
-                echo 'Deploying....'
+                script {
+                    // Archive the build artifacts (e.g., the 'dist' folder)
+                    archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
+                }
             }
+        }
+
+        stage('Deploy to AWS S3') {
+            when {
+                expression { params.ENVIRONMENT in ['dev', 'testing', 'staging', 'production'] }
+            }
+            steps {
+                script {
+                    // Define S3 bucket names or prefixes based on the environment
+                    def s3Bucket = "stk-sample-bucket"
+                    def s3Prefix = "sample"
+
+                    switch (params.ENVIRONMENT) {
+                        case 'dev':
+                            s3Bucket = 'stk-sample-bucket'
+                            s3Prefix = 'sample'
+                            break
+                        case 'testing':
+                            s3Bucket = 'stk-sample-bucket'
+                            s3Prefix = 'sample'
+                            break
+                        
+                        default:
+                            error "Unknown environment: ${params.ENVIRONMENT}"
+                    }
+
+                    // Sync the build artifacts to the specified S3 bucket and prefix
+                    bat """
+                        aws s3 sync dist/ s3://${s3Bucket}/${s3Prefix}/ --delete
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            emailext (
+                subject: "Deployment Successful: DemoProject (${params.ENVIRONMENT})",
+                body: """<p>Hi Team,</p>
+                        <p>The deployment for <strong>DemoProject</strong> to the <strong>${params.ENVIRONMENT}</strong> environment was successful.</p>
+                        <p>Build Details:</p>
+                        <ul>
+                            <li>Build Timestamp: ${BUILD_TIMESTAMP}</li>
+                            <li>Build URL: <a href="${BUILD_URL}">${BUILD_URL}</a></li>
+                        </ul>
+                        <p>You can access the deployed application at the respective S3 bucket.</p>
+                        <p>Best Regards,<br/>Jenkins CI</p>""",
+                to: "${params.emailRecipients}",
+                mimeType: 'text/html'
+            )
+        }
+
+        failure {
+            emailext (
+                subject: "Deployment Failed: DemoProject (${params.ENVIRONMENT})",
+                body: """<p>Hi Team,</p>
+                        <p>The deployment for <strong>DemoProject</strong> to the <strong>${params.ENVIRONMENT}</strong> environment has failed.</p>
+                        <p>Build Details:</p>
+                        <ul>
+                            <li>Build Timestamp: ${BUILD_TIMESTAMP}</li>
+                            <li>Build URL: <a href="${BUILD_URL}">${BUILD_URL}</a></li>
+                        </ul>
+                        <p>Please check the Jenkins logs for more details.</p>
+                        <p>Best Regards,<br/>Jenkins CI</p>""",
+                to: "${params.emailRecipients}",
+                mimeType: 'text/html'
+            )
+        }
+
+        always {
+            // Optionally, you can add steps that run regardless of build status
+            // For example, cleaning up the workspace
+            cleanWs()
         }
     }
 }
